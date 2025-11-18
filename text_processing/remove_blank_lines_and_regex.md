@@ -1,7 +1,7 @@
 # Text Processing: Removing Blank Lines & Regex Replacements
 
 ## Overview
-Comprehensive examples for condensing multiple newlines and performing regex-based line replacements using sed, awk, and perl.
+Comprehensive examples for condensing multiple newlines, performing regex-based line replacements, and deduplication using sed, awk, and perl.
 
 ---
 
@@ -236,6 +236,115 @@ somecommand | perl -0777 -pe 's/(START.*?)END/$1MODIFIED/gs'
 
 ---
 
+## Task 3: Line Deduplication with AWK
+
+### Understanding `awk 'NF || !seen[$0]++`
+
+This is a **deduplication pattern**, NOT a consecutive blank-line condenser.
+
+```bash
+# Remove all duplicate lines, preserve first blank
+somecommand | awk 'NF || !seen[$0]++'
+
+# How it works:
+# NF            - Number of Fields (true for non-empty, always printed)
+# ||            - Logical OR
+# !seen[$0]++   - The deduplication idiom:
+#                 - seen[$0]: associative array indexed by line
+#                 - ++: post-increment (after evaluation)
+#                 - !: negation (true when 0)
+#                 First time: seen[$0]=0 → !0=true → prints → increments to 1
+#                 Duplicate: seen[$0]=1+ → !1=false → skips
+```
+
+### Behavior Comparison
+
+**Test file**:
+```
+Line A
+Line B
+
+Line A
+Line C
+
+Line B
+
+```
+
+**Using consecutive blank condenser** (`awk 'NF {blank=0; print} !NF {if (!blank++) print}'`):
+```
+Line A
+Line B
+
+Line A
+Line C
+
+Line B
+
+```
+Result: Keeps all lines, condenses consecutive blanks to one.
+
+**Using deduplicator** (`awk 'NF || !seen[$0]++'`):
+```
+Line A
+Line B
+
+Line C
+```
+Result: Removes duplicate "Line A" and "Line B", keeps only first blank.
+
+**Using classic deduplication** (`awk '!seen[$0]++'`):
+```
+Line A
+Line B
+
+Line C
+```
+Result: Same - ALL blank lines treated as duplicates, only first kept.
+
+### Deduplication Variants
+
+```bash
+# Classic: remove ALL duplicates (including all blank lines)
+awk '!seen[$0]++'
+
+# Preserve blank lines (doesn't deduplicate them)
+awk 'NF || !seen[$0]++'
+
+# Keep last occurrence instead of first
+tac file | awk '!seen[$0]++' | tac
+
+# Field-based deduplication (unique by column 2)
+awk -F, '!seen[$2]++'
+
+# Case-insensitive deduplication
+awk '{line=tolower($0)} !seen[line]++'
+
+# Remove only adjacent duplicates (like uniq)
+awk '$0 != prev {print} {prev=$0}'
+
+# Always print blank lines, deduplicate content lines only
+awk '/^$/ {print; next} !seen[$0]++'
+```
+
+### Advanced Deduplication
+
+```bash
+# Keep lines appearing exactly once (remove all duplicates)
+awk '{count[$0]++; lines[NR]=$0} END {for(i=1; i<=NR; i++) if(count[lines[i]]==1) print lines[i]}'
+
+# Show which lines are duplicates with marker
+awk '{count[$0]++} count[$0]==1 {print} count[$0]>1 {print "[DUP]" $0}'
+
+# Count duplicates
+awk '{count[$0]++} END {for (line in count) print count[line], line}'
+
+# Keep first N occurrences (e.g., first 2)
+awk '{if (seen[$0]++ < 2) print}'
+```
+
+---
+
 ## Recommendation Summary
 
 ### For Removing Redundant Newlines:
@@ -260,6 +369,31 @@ somecommand | perl -0777 -pe 's/(START.*?)END/$1MODIFIED/gs'
 - When perl unavailable
 - Simpler patterns without advanced features
 - Very portable (POSIX)
+
+### For Line Deduplication:
+**Best choice: `awk '!seen[$0]++'`**
+- Idiomatic, elegant
+- Most common awk pattern for this
+- Maintains order
+
+**With blank preservation: `awk 'NF || !seen[$0]++'`**
+- Keeps one blank line
+- Deduplicates content only
+
+---
+
+## Decision Matrix
+
+| Task | Tool | Command |
+|------|------|----------|
+| Condense consecutive blanks | perl | `perl -00 -pe ''` |
+| Condense consecutive blanks | awk | `awk 'NF {blank=0; print} !NF {if (!blank++) print}'` |
+| Remove ALL duplicates | awk | `awk '!seen[$0]++'` |
+| Dedupe + preserve blanks | awk | `awk 'NF \|\| !seen[$0]++'` |
+| Simple regex replace | sed | `sed -E 's/pattern/replacement/'` |
+| Complex regex replace | perl | `perl -pe 's/pattern/replacement/'` |
+| Delete matching lines | sed | `sed '/pattern/d'` |
+| Adjacent duplicate removal | awk | `awk '$0 != prev {print} {prev=$0}'` |
 
 ---
 
@@ -286,6 +420,15 @@ cat log.txt | perl -00 -pe 's/(\d{1,3}\.\d{1,3}\.\d{1,3}\.)\d{1,3}/${1}XXX/g'
 # ${1}XXX       - Keep first 3, replace last with XXX
 ```
 
+### Deduplicate and clean
+```bash
+# Remove duplicates AND condense blanks (two passes)
+somecommand | awk '!seen[$0]++' | awk 'NF {blank=0; print} !NF {if (!blank++) print}'
+
+# Single perl pass (different behavior)
+somecommand | perl -ne 'print if /\S/ && !$seen{$_}++; print if /^$/ && !$blank++; $blank=0 if /\S/'
+```
+
 ### Clean up command output
 ```bash
 # Remove blank lines and extract version numbers
@@ -306,6 +449,7 @@ some-verbose-command 2>&1 | perl -ne 'print if /\S/; next if /^$/; s/Version:? (
 - **awk**: Fast, better for field processing, good balance
 - **perl**: Slightly slower, but negligible for most use cases; most powerful
 - **All are streaming**: Process line-by-line (except perl -0777)
+- **Deduplication**: Requires memory for seen hash (scales linearly with unique lines)
 
 ## Portability
 
@@ -313,3 +457,21 @@ some-verbose-command 2>&1 | perl -ne 'print if /\S/; next if /^$/; s/Version:? (
 - **GNU extensions**: sed -E, awk gensub() (widely available)
 - **perl**: Nearly universal on Unix/Linux, not always on minimal containers
 - **fish/bash/sh/dash**: All examples work in any shell (commands are external)
+
+---
+
+## Key Idioms Summary
+
+**Consecutive blank condensing**:
+- `perl -00 -pe ''` - Paragraph mode
+- `awk 'NF {blank=0; print} !NF {if (!blank++) print}'` - State tracking
+
+**Deduplication**:
+- `awk '!seen[$0]++'` - Classic, removes all duplicates
+- `awk 'NF || !seen[$0]++'` - Preserves blank lines
+
+**Regex replacement**:
+- `perl -pe 's/(pattern)/$1/g'` - Most powerful
+- `sed -E 's/(pattern)/\1/g'` - Most portable
+
+The `!seen[$0]++` idiom is one of awk's most elegant patterns - it leverages associative arrays and post-increment in a single expression to track uniqueness.
