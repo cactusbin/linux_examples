@@ -1,0 +1,98 @@
+# Docker Compose for binhex/arch-bitmagnet
+# A self-hosted BitTorrent indexer, DHT crawler, and torrent search engine
+# Documentation: https://github.com/bitmagnet-io/bitmagnet
+# Docker Hub: https://hub.docker.com/r/binhex/arch-bitmagnet
+
+version: '3.8'
+
+services:
+  # PostgreSQL database - required for bitmagnet
+  bitmagnet-postgres:
+    image: postgres:16-alpine
+    container_name: bitmagnet-postgres
+    environment:
+      # Database credentials
+      POSTGRES_DB: bitmagnet
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      # Persist database data
+      - ./data/postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - bitmagnet-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Increase shared memory for better performance
+    shm_size: 1g
+
+  # binhex arch-bitmagnet - includes built-in PostgreSQL management
+  bitmagnet:
+    image: binhex/arch-bitmagnet:latest
+    container_name: bitmagnet
+    depends_on:
+      bitmagnet-postgres:
+        condition: service_healthy
+    ports:
+      # Web UI and API
+      - "3333:3333"
+      # BitTorrent DHT crawler ports
+      - "3344:3344/tcp"
+      - "3344:3344/udp"
+      # PostgreSQL port (exposed for external tools if needed)
+      - "5432:5432"
+    volumes:
+      # Configuration directory
+      - ./config:/config
+      # System timezone (read-only)
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      # === TMDB API Configuration ===
+      # Get your API key from: https://www.themoviedb.org/settings/api
+      # Used for content metadata enrichment
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      
+      # === Processor Configuration ===
+      # Number of concurrent processors for metadata enrichment
+      # Adjust based on your CPU cores (recommended: num_cores - 1)
+      - PROCESSOR_CONCURRENCY=${PROCESSOR_CONCURRENCY:-4}
+      
+      # === Database Maintenance ===
+      # Run VACUUM on PostgreSQL database (reclaims storage)
+      - POSTGRES_VACUUM_DB=${POSTGRES_VACUUM_DB:-false}
+      # Reindex PostgreSQL database (improves query performance)
+      - POSTGRES_REINDEX_DB=${POSTGRES_REINDEX_DB:-false}
+      
+      # === Health Check Configuration ===
+      # Custom healthcheck command (optional)
+      - HEALTHCHECK_COMMAND=${HEALTHCHECK_COMMAND:-}
+      # Action to take on health check failure
+      - HEALTHCHECK_ACTION=${HEALTHCHECK_ACTION:-}
+      # Hostname for health checks
+      - HEALTHCHECK_HOSTNAME=${HEALTHCHECK_HOSTNAME:-localhost}
+      
+      # === User/Group IDs ===
+      # Run as specific user/group (0=root, or use your user ID)
+      # Get your IDs with: id -u && id -g
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
+      
+      # === File Permissions ===
+      # umask for created files (000=rwx, 022=rx for group/other)
+      - UMASK=${UMASK:-022}
+    restart: unless-stopped
+    networks:
+      - bitmagnet-net
+
+networks:
+  bitmagnet-net:
+    driver: bridge
+
+# Volume definitions (optional, using bind mounts above)
+volumes:
+  postgres-data:
+  bitmagnet-config:
